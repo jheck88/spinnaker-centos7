@@ -55,20 +55,6 @@ else
   DISTRO=$(uname -s)
 fi
 
-# If not Ubuntu 14.xx.x or higher
-
-if [[ "$DISTRO" == "Ubuntu" ]]; then
-  if [[ "${DISTRIB_RELEASE%%.*}" -lt 14 ]]; then
-    echo "Not a supported version of Ubuntu"
-    echo "Version is $DISTRIB_RELEASE we require 14.04 or higher"
-    exit 1
-  fi
-else
-  echo "Not a supported operating system"
-  echo "Recommend you use Ubuntu 14.04 or higher"
-  exit 1
-fi
-
 
 function print_usage() {
   cat <<EOF
@@ -400,49 +386,57 @@ function set_defaults_from_environ() {
   fi
 }
 
-function add_apt_repositories() {
-  # Redis
-  # https://launchpad.net/~chris-lea/+archive/ubuntu/redis-server
-  add-apt-repository -y ppa:chris-lea/redis-server
-  # Cassandra
-  # http://docs.datastax.com/en/cassandra/2.1/cassandra/install/installDeb_t.html
-  curl -s -L http://debian.datastax.com/debian/repo_key | apt-key add -
-  echo "deb http://debian.datastax.com/community/ stable main" | tee /etc/apt/sources.list.d/datastax.list > /dev/null
-
-  # Spinnaker
-  # DL Repo goes here
-  REPOSITORY_HOST=$(echo $REPOSITORY_URL | cut -d/ -f3)
-  if [[ "$REPOSITORY_HOST" == "dl.bintray.com" ]]; then
-    REPOSITORY_ORG=$(echo $REPOSITORY_URL | cut -d/ -f4)
-    # Personal repositories might not be signed, so conditionally check.
-    gpg=""
-    gpg=$(curl -s -f "https://bintray.com/user/downloadSubjectPublicKey?username=$REPOSITORY_ORG") || true
-    if [[ ! -z "$gpg" ]]; then
-      echo "$gpg" | apt-key add -
-    fi
-  fi
-  echo "deb $REPOSITORY_URL $DISTRIB_CODENAME spinnaker" | tee /etc/apt/sources.list.d/spinnaker-dev.list > /dev/null
-  # Java 8
-  # https://launchpad.net/~openjdk-r/+archive/ubuntu/ppa
-  add-apt-repository -y ppa:openjdk-r/ppa
-  apt-get update ||:
-}
+# function add_apt_repositories() {
+#   # Redis
+#   # https://launchpad.net/~chris-lea/+archive/ubuntu/redis-server
+#   add-apt-repository -y ppa:chris-lea/redis-server
+#   # Cassandra
+#   # http://docs.datastax.com/en/cassandra/2.1/cassandra/install/installDeb_t.html
+#   curl -s -L http://debian.datastax.com/debian/repo_key | apt-key add -
+#   echo "deb http://debian.datastax.com/community/ stable main" | tee /etc/apt/sources.list.d/datastax.list > /dev/null
+# 	
+#   # Spinnaker
+#   # DL Repo goes here
+#   REPOSITORY_HOST=$(echo $REPOSITORY_URL | cut -d/ -f3)
+#   if [[ "$REPOSITORY_HOST" == "dl.bintray.com" ]]; then
+#     REPOSITORY_ORG=$(echo $REPOSITORY_URL | cut -d/ -f4)
+#     # Personal repositories might not be signed, so conditionally check.
+#     gpg=""
+#     gpg=$(curl -s -f "https://bintray.com/user/downloadSubjectPublicKey?username=$REPOSITORY_ORG") || true
+#     if [[ ! -z "$gpg" ]]; then
+#       echo "$gpg" | apt-key add -
+#     fi
+#   fi
+#   echo "deb $REPOSITORY_URL $DISTRIB_CODENAME spinnaker" | tee /etc/apt/sources.list.d/spinnaker-dev.list > /dev/null
+#   # Java 8
+#   # https://launchpad.net/~openjdk-r/+archive/ubuntu/ppa
+#   add-apt-repository -y ppa:openjdk-r/ppa
+#   apt-get update ||:
+#   
+#   
+# }
 
 function install_java() {
-  if ! $DOWNLOAD; then
-    apt-get install -y --force-yes openjdk-8-jdk
+if type -p java; then
+    echo found java executable in PATH
+    _java=java
+elif [[ -n "$JAVA_HOME" ]] && [[ -x "$JAVA_HOME/bin/java" ]];  then
+    echo found java executable in JAVA_HOME     
+    _java="$JAVA_HOME/bin/java"
+else
+    echo "no java"
+fi
 
-    # https://bugs.launchpad.net/ubuntu/+source/ca-certificates-java/+bug/983302
-    # It seems a circular dependency was introduced on 2016-04-22 with an openjdk-8 release, where
-    # the JRE relies on the ca-certificates-java package, which itself relies on the JRE. D'oh!
-    # This causes the /etc/ssl/certs/java/cacerts file to never be generated, causing a startup
-    # failure in Clouddriver.
-    dpkg --purge --force-depends ca-certificates-java
-    apt-get install ca-certificates-java
-  elif [[ "x`java -version 2>&1|head -1`" != *"1.8.0"* ]]; then
-    echo "you must manually install java 8 and then rerun this script; exiting"
-    exit 13
-  fi
+if [[ "$_java" ]]; then
+    version=$("$_java" -version 2>&1 | awk -F '"' '/version/ {print $2}')
+    echo version "$version"
+    if [[ "$version" > "1.8" ]]; then
+        echo java version acceptable
+    else         
+		echo java version less than 1.8 exiting
+		exit 0	
+    fi
+fi
 }
 
 function install_platform_dependencies() {
@@ -484,173 +478,125 @@ function install_platform_dependencies() {
 function install_dependencies() {
   # java
   if ! $DOWNLOAD; then
-    apt-get install -y --force-yes unzip
+#     apt-get install -y --force-yes unzip
+    yum install unzip.x86_64
   else
-    mkdir $TEMPDIR/deppkgs && pushd $TEMPDIR/deppkgs
-    curl -L -O http://mirrors.kernel.org/ubuntu/pool/main/a/autogen/libopts25_5.18-2ubuntu2_amd64.deb
-    curl -L -O http://security.ubuntu.com/ubuntu/pool/main/n/ntp/ntp_4.2.6.p5+dfsg-3ubuntu2.14.04.5_amd64.deb
-    curl -L -O http://mirrors.kernel.org/ubuntu/pool/universe/p/python-support/python-support_1.0.15_all.deb
-    curl -L -O http://security.ubuntu.com/ubuntu/pool/main/u/unzip/unzip_6.0-9ubuntu1.5_amd64.deb
-    dpkg -i *.deb
-    popd
-    rm -rf $TEMPDIR/deppkgs
+#     mkdir $TEMPDIR/deppkgs && pushd $TEMPDIR/deppkgs
+#     curl -L -O http://mirrors.kernel.org/ubuntu/pool/main/a/autogen/libopts25_5.18-2ubuntu2_amd64.deb
+	yum install autogen-libopts.x86_64
+#     curl -L -O http://security.ubuntu.com/ubuntu/pool/main/n/ntp/ntp_4.2.6.p5+dfsg-3ubuntu2.14.04.5_amd64.deb
+	yum install ntp.x86_64
+#     curl -L -O http://mirrors.kernel.org/ubuntu/pool/universe/p/python-support/python-support_1.0.15_all.deb
+	yum install redhat-support-lib-python.noarch
+#     curl -L -O http://security.ubuntu.com/ubuntu/pool/main/u/unzip/unzip_6.0-9ubuntu1.5_amd64.deb
+    yum install unzip.x86_64
+#     dpkg -i *.deb
+#     popd
+#     rm -rf $TEMPDIR/deppkgs
   fi
 }
 
 function install_redis_server() {
-  apt-get -q -y --force-yes install redis-server
-  local apt_status=$?
-  if [[ $apt_status -eq 0 ]]; then
-    return
-  fi
+#   apt-get -q -y --force-yes install redis-server
+	yum install redhat-support-lib-python.noarch
+#   local apt_status=$?
+#   if [[ $apt_status -eq 0 ]]; then
+#     return
+#   fi
 
-  if $DOWNLOAD && [[ $apt_status -eq 100 ]]; then
-    echo "Manually downloading and installing redis-server..."
-    mkdir $TEMPDIR/deppkgs && pushd $TEMPDIR/deppkgs
-    curl -L -O http://mirrors.kernel.org/ubuntu/pool/universe/j/jemalloc/libjemalloc1_3.6.0-2_amd64.deb
-
-    curl -L -O https://launchpad.net/~chris-lea/+archive/ubuntu/redis-server/+build/8914180/+files/redis-server_3.0.7-1chl1~trusty1_amd64.deb
-    dpkg -i *.deb
-    popd
-    rm -rf $TEMPDIR/deppkgs
-  else
-    echo "Error installing redis-server."
-    echo "cannot continue installation; exiting."
-    exit 13
-  fi
+#   if $DOWNLOAD && [[ $apt_status -eq 100 ]]; then
+#     echo "Manually downloading and installing redis-server..."
+#     mkdir $TEMPDIR/deppkgs && pushd $TEMPDIR/deppkgs
+#     curl -L -O http://mirrors.kernel.org/ubuntu/pool/universe/j/jemalloc/libjemalloc1_3.6.0-2_amd64.deb
+# 
+#     curl -L -O https://launchpad.net/~chris-lea/+archive/ubuntu/redis-server/+build/8914180/+files/redis-server_3.0.7-1chl1~trusty1_amd64.deb
+#     dpkg -i *.deb
+#     popd
+#     rm -rf $TEMPDIR/deppkgs
+#   else
+#     echo "Error installing redis-server."
+#     echo "cannot continue installation; exiting."
+#     exit 13
+#   fi
 }
 
 function install_apache2() {
   # If apache2 is installed, we want to do as little modification
   # as possible to the existing installation.
-  if ! $(dpkg -s apache2 2>/dev/null >/dev/null)
-  then
-    echo "updating apt cache..." && apt-get -q update > /dev/null 2>&1 ||:
-    local apt_status=`apt-get -s -y --force-yes install apache2 > /dev/null 2>&1 ; echo $?`
-    if [[ $apt_status -eq 0 ]]; then
-      echo "apt sources contain apache2; installing using apt-get"
-      apt-get -q -y --force-yes install apache2
-    elif $DOWNLOAD && [[ $apt_status -eq 100 ]]; then
-      echo "no valid apache2 package found in apt sources; attempting to download debs and install locally..."
-      mkdir $TEMPDIR/apache2 && pushd $TEMPDIR/apache2
-      curl -L -O http://security.ubuntu.com/ubuntu/pool/main/a/apache2/apache2_2.4.7-1ubuntu4.5_amd64.deb
-      curl -L -O http://security.ubuntu.com/ubuntu/pool/main/a/apache2/apache2-bin_2.4.7-1ubuntu4.5_amd64.deb
-      curl -L -O http://security.ubuntu.com/ubuntu/pool/main/a/apache2/apache2-data_2.4.7-1ubuntu4.5_all.deb
-      curl -L -O http://mirrors.kernel.org/ubuntu/pool/main/a/apr/libapr1_1.5.0-1_amd64.deb
-      curl -L -O http://mirrors.kernel.org/ubuntu/pool/main/a/apr-util/libaprutil1_1.5.3-1_amd64.deb
-      curl -L -O http://mirrors.kernel.org/ubuntu/pool/main/a/apr-util/libaprutil1-dbd-sqlite3_1.5.3-1_amd64.deb
-      curl -L -O http://mirrors.kernel.org/ubuntu/pool/main/a/apr-util/libaprutil1-ldap_1.5.3-1_amd64.deb
-      curl -L -O http://mirrors.kernel.org/ubuntu/pool/main/s/ssl-cert/ssl-cert_1.0.33_all.deb
-      dpkg -i *.deb
-      popd && rm -rf $TEMPDIR/apache2
-    else
-      echo "unknown error ($apt_status) occurred attempting to install apache2"
-      echo "cannot continue installation; exiting"
-      exit 13
-    fi
-    # vhosts
-    if ! grep -Fxq "Listen 127.0.0.1:9000" /etc/apache2/ports.conf
-    then
-      sed -i "s/Listen\ 80/Listen 127.0.0.1:9000/" /etc/apache2/ports.conf
-    fi
-  else
-    # vhosts
-    if ! grep -Fxq "Listen 127.0.0.1:9000" /etc/apache2/ports.conf
-    then
-      echo "Listen 127.0.0.1:9000" >> /etc/apache2/ports.conf
-    fi
-  fi
+#   if ! $(dpkg -s apache2 2>/dev/null >/dev/null)
+#   then
+#     echo "updating apt cache..." && apt-get -q update > /dev/null 2>&1 ||:
+#     local apt_status=`apt-get -s -y --force-yes install apache2 > /dev/null 2>&1 ; echo $?`
+#     if [[ $apt_status -eq 0 ]]; then
+#       echo "apt sources contain apache2; installing using apt-get"
+#       apt-get -q -y --force-yes install apache2
+#     elif $DOWNLOAD && [[ $apt_status -eq 100 ]]; then
+#       echo "no valid apache2 package found in apt sources; attempting to download debs and install locally..."
+#       mkdir $TEMPDIR/apache2 && pushd $TEMPDIR/apache2
+#       curl -L -O http://security.ubuntu.com/ubuntu/pool/main/a/apache2/apache2_2.4.7-1ubuntu4.5_amd64.deb
+#       curl -L -O http://security.ubuntu.com/ubuntu/pool/main/a/apache2/apache2-bin_2.4.7-1ubuntu4.5_amd64.deb
+#       curl -L -O http://security.ubuntu.com/ubuntu/pool/main/a/apache2/apache2-data_2.4.7-1ubuntu4.5_all.deb
+#       curl -L -O http://mirrors.kernel.org/ubuntu/pool/main/a/apr/libapr1_1.5.0-1_amd64.deb
+#       curl -L -O http://mirrors.kernel.org/ubuntu/pool/main/a/apr-util/libaprutil1_1.5.3-1_amd64.deb
+#       curl -L -O http://mirrors.kernel.org/ubuntu/pool/main/a/apr-util/libaprutil1-dbd-sqlite3_1.5.3-1_amd64.deb
+#       curl -L -O http://mirrors.kernel.org/ubuntu/pool/main/a/apr-util/libaprutil1-ldap_1.5.3-1_amd64.deb
+#       curl -L -O http://mirrors.kernel.org/ubuntu/pool/main/s/ssl-cert/ssl-cert_1.0.33_all.deb
+#       dpkg -i *.deb
+#       popd && rm -rf $TEMPDIR/apache2
+#     else
+#       echo "unknown error ($apt_status) occurred attempting to install apache2"
+#       echo "cannot continue installation; exiting"
+#       exit 13
+#     fi
+#     # vhosts
+#     if ! grep -Fxq "Listen 127.0.0.1:9000" /etc/apache2/ports.conf
+#     then
+#       sed -i "s/Listen\ 80/Listen 127.0.0.1:9000/" /etc/apache2/ports.conf
+#     fi
+#   else
+#     # vhosts
+#     if ! grep -Fxq "Listen 127.0.0.1:9000" /etc/apache2/ports.conf
+#     then
+#       echo "Listen 127.0.0.1:9000" >> /etc/apache2/ports.conf
+#     fi
+#   fi
+ 
+	yum install httpd.x86_64
+	yum install httpd-tools.x86_64
+	yum install mod_auth_mellon.x86_64
+	yum install apr.x86_64
+	yum install apr-util-sqlite.x86_64
+	yum install apr-util-ldap.x86_64
+	yum install apr-util-pgsql.x86_64
 }
 
 function install_cassandra() {
-  # "service cassandra status" is currently broken in Ubuntu grep in the script is grepping for things that do not exist
-  # Cassandra 2.x can ship with RPC disabled to enable run "nodetool enablethrift"
-
-  local package_url="http://debian.datastax.com/community/pool"
-
-  if [[ "x`java -version 2>&1|head -1`" != *"1.8.0"* ]]; then
-    cat <<EOF
-java 8 is not installed, cannot install cassandra
-
-   After installing java 8 run the following to install cassandra:
-
-   sudo apt-get install -y --force-yes cassandra=2.1.11 cassandra-tools=2.1.11
-   sudo apt-mark hold cassandra cassandra-tools
-
-cannot continue installation; exiting
-EOF
-    exit 13
-  fi
-
-  local cassandra_packages=$(apt-cache search cassandra)
-  if [[ -z "$cassandra_packages" ]]; then
-    if $DOWNLOAD; then
-      echo "cassandra not found in apt-cache, downloading from $package_url..."
-      mkdir $TEMPDIR/casspkgs && pushd $TEMPDIR/casspkgs
-      for pkg in cassandra cassandra-tools;do
-        curl -L -O $package_url/${pkg}_2.1.11_all.deb
-      done
-      dpkg -i *.deb
-      apt-mark hold cassandra cassandra-tools
-      popd
-      rm -rf $TEMPDIR/casspkgs
-    else
-      echo "Error installing cassandra."
-      echo "cannot continue installation; exiting."
-      exit 13
-    fi
-  else
-    apt-get install -y --force-yes cassandra=2.1.11 cassandra-tools=2.1.11
-    apt-mark hold cassandra cassandra-tools
-    sleep 1
-  fi
-
-  # Let cassandra start
-  if ! nc -z localhost 7199; then
-    echo_status "Waiting for Cassandra to start..."
-    count=0
-    while ! nc -z localhost 7199; do
-      sleep 1
-      count=`expr $count + 1`
-      if [[ $count -eq 30 ]]; then
-        break
-      fi
-    done
-    if ! nc -z localhost 7199; then
-      echo "Cassandra has failed to start; exiting"
-      exit 13
-    else
-      echo_status "Cassandra is ready."
-    fi
-  fi
-
-  while ! $(nodetool enablethrift >& /dev/null); do
-    sleep 1
-    echo_status "Retrying..."
-  done
+	yum install cassandra30.noarch
+	yum install cassandra30-tools.noarch
+	service cassandra start
 }
 
-function install_spinnaker() {
-  apt-get install -y --force-yes --allow-unauthenticated spinnaker
-  local apt_status=$?
-  if [[ $apt_status -ne 0 ]]; then
-    if $DOWNLOAD && [[ $apt_status -eq 100 ]]; then
-      install_packages="spinnaker-clouddriver spinnaker-deck spinnaker-echo spinnaker-fiat spinnaker-front50 spinnaker-gate spinnaker-igor spinnaker-orca spinnaker-rosco spinnaker_"
-      for package in $install_packages;do
-        latest=`curl $REPOSITORY_URL/dists/$DISTRIB_CODENAME/spinnaker/binary-amd64/Packages | grep "^Filename" | grep $package | awk '{print $2}' | awk -F'/' '{print $NF}' | sort -t. -k 1,1n -k 2,2n -k 3,3n | tail -1`
-        debfile=`echo $latest | awk -F "/" '{print $NF}'`
-        filelocation=`curl $REPOSITORY_URL/dists/$DISTRIB_CODENAME/spinnaker/binary-amd64/Packages | grep "^Filename" | grep $latest | awk '{print $2}'`
-        curl -L -o /tmp/$debfile $REPOSITORY_URL/$filelocation
-        dpkg -i /tmp/$debfile && rm -f /tmp/$debfile
-      done
-    else
-      echo "Error installing spinnaker."
-      echo "cannot continue installation; exiting."
-      exit 13
-    fi
-  fi
-
-}
+# function install_spinnaker() {
+#   apt-get install -y --force-yes --allow-unauthenticated spinnaker
+#   local apt_status=$?
+#   if [[ $apt_status -ne 0 ]]; then
+#     if $DOWNLOAD && [[ $apt_status -eq 100 ]]; then
+#       install_packages="spinnaker-clouddriver spinnaker-deck spinnaker-echo spinnaker-fiat spinnaker-front50 spinnaker-gate spinnaker-igor spinnaker-orca spinnaker-rosco spinnaker_"
+#       for package in $install_packages;do
+#         latest=`curl $REPOSITORY_URL/dists/$DISTRIB_CODENAME/spinnaker/binary-amd64/Packages | grep "^Filename" | grep $package | awk '{print $2}' | awk -F'/' '{print $NF}' | sort -t. -k 1,1n -k 2,2n -k 3,3n | tail -1`
+#         debfile=`echo $latest | awk -F "/" '{print $NF}'`
+#         filelocation=`curl $REPOSITORY_URL/dists/$DISTRIB_CODENAME/spinnaker/binary-amd64/Packages | grep "^Filename" | grep $latest | awk '{print $2}'`
+#         curl -L -o /tmp/$debfile $REPOSITORY_URL/$filelocation
+#         dpkg -i /tmp/$debfile && rm -f /tmp/$debfile
+#       done
+#     else
+#       echo "Error installing spinnaker."
+#       echo "cannot continue installation; exiting."
+#       exit 13
+#     fi
+#   fi
+# 
+# }
 
 set_defaults_from_environ
 
@@ -675,11 +621,6 @@ if $GOOGLE_ENABLED; then
 fi
 
 
-# Only add external apt repositories if we are not --local_install
-if ! $DOWNLOAD; then
-  add_apt_repositories
-fi
-
 TEMPDIR=$(mktemp -d installspinnaker.XXXX)
 
 install_java
@@ -687,9 +628,7 @@ install_apache2
 install_platform_dependencies
 install_dependencies
 install_redis_server
-if [[ "$INSTALL_CASSANDRA" != "false" ]]; then
-  install_cassandra
-fi
+install_cassandra
 
 ## Packer
 mkdir $TEMPDIR/packer && pushd $TEMPDIR/packer
@@ -705,16 +644,11 @@ if $DEPENDENCIES_ONLY; then
 fi
 
 ## Spinnaker
-install_spinnaker
 
-if [[ "$INSTALL_CASSANDRA" != "false" ]]; then
   # Touch a file to tell other scripts we installed Cassandra.
   touch /opt/spinnaker/cassandra/SPINNAKER_INSTALLED_CASSANDRA
   cqlsh -f "/opt/spinnaker/cassandra/create_echo_keyspace.cql"
   cqlsh -f "/opt/spinnaker/cassandra/create_front50_keyspace.cql"
-else
-  /opt/spinnaker/install/change_cassandra.sh --echo=inMemory --front50=gcs --change_defaults=true --change_local=false
-fi
 
 # Write values to /etc/default/spinnaker.
 if [[ $AWS_ENABLED || $AZURE_ENABLED || $GOOGLE_ENABLED ]] ; then
