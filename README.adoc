@@ -2,6 +2,8 @@
 
 image:http://join.spinnaker.io/badge.svg[Slack Status,link=http://join.spinnaker.io]
 
+= Changing Spinnaker for Enterprise world
+
 = Using Spinnaker
 
 If you are only interested in using Spinnaker, please refer to the main
